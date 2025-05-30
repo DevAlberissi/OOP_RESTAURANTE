@@ -1,10 +1,12 @@
 import os
 from datetime import datetime
 import time
+from abc import ABC, abstractmethod
 
-from sqlalchemy import create_engine, Column, Integer, String, Float, ForeignKey, Table, Date
+from sqlalchemy import create_engine, Column, Integer, String, Float, ForeignKey, Table, Date, DateTime
 from sqlalchemy.orm import declarative_base, relationship, sessionmaker
 from sqlalchemy.exc import IntegrityError 
+from sqlalchemy import func
 
 Base = declarative_base()
 engine = create_engine('sqlite:///restaurante.db', echo=False)
@@ -12,6 +14,7 @@ Session = sessionmaker(bind=engine)
 session = Session()
 
 #====== TABELA ASSOCIATIVA ENTRE PEDIDO E PRODUTO ======
+
 pedido_produto = Table(
     'pedido_produto', Base.metadata,
     Column('pedido_id', ForeignKey('pedidos.id'), primary_key=True),
@@ -64,6 +67,14 @@ class Cliente(Base):
     @data_nascimento.setter
     def data_nascimento(self, value):
         self._data_nascimento = value
+        
+    @classmethod
+    def total_clientes_cadastrados(cls):
+        return session.query(cls).count()
+
+    @classmethod
+    def clientes_por_faixa_etaria(cls, idade_min, idade_max):
+        return session.query(cls).filter(cls._idade.between(idade_min, idade_max)).all()
 
 class Funcionario(Base):
     __tablename__ = 'funcionarios'
@@ -126,6 +137,17 @@ class Funcionario(Base):
     @salario.setter
     def salario(self, value):
         self._salario = value
+        
+        
+    @classmethod
+    def total_funcionarios_por_cargo(cls):
+        cargos = session.query(cls._cargo).distinct()
+        return {cargo[0]: session.query(cls).filter(cls._cargo == cargo[0]).count() 
+                for cargo in cargos}
+
+    @classmethod
+    def media_salarial(cls):
+        return session.query(func.avg(cls._salario)).scalar()
 
 class Produto(Base):
     __tablename__ = 'produtos'
@@ -162,6 +184,17 @@ class Produto(Base):
     @quantidade.setter
     def quantidade(self, value):
         self._quantidade = value
+        
+    @classmethod
+    def produtos_abaixo_estoque(cls, limite=5):
+        """Retorna produtos com quantidade abaixo do limite especificado"""
+        return session.query(cls).filter(cls._quantidade < limite).all()
+
+    @classmethod
+    def valor_total_estoque(cls):
+        """Calcula o valor total em estoque"""
+        produtos = session.query(cls).all()
+        return sum(p._valor * p._quantidade for p in produtos)
 
 class Pagamento(Base):
     __tablename__ = 'pagamentos'
@@ -354,7 +387,8 @@ def menu_gerenciamento():
         print('3. CARDÁPIO')
         print('4. ESTOQUE_PRODUTO')
         print('5. PAGAMENTO')
-        print('6. SAIR')
+        print('6. RELATÓRIOS')
+        print('7. SAIR')
 
         try:
             opcao = int(input('Escolha uma opção: '))
@@ -369,10 +403,12 @@ def menu_gerenciamento():
             elif opcao == 5:
                 visualizar_pagamentos()
             elif opcao == 6:
+                menu_relatorios()
+            elif opcao == 7:
                 sair()
             else:
                 limpar_tela()
-                print('Opção inválida! Digite um número de 1 a 6.')
+                print('Opção inválida! Digite um número de 1 a 7.')
                 volta_menu()
         except ValueError:
             limpar_tela()
@@ -699,6 +735,7 @@ def visualizar_pagamentos():
     input("\nPressione Enter para continuar...")
     volta_menu()
 
+# ====== REGISTRAR PAGAMENTO ======
 
 def registrar_pagamento():
     limpar_tela()
@@ -726,19 +763,76 @@ def registrar_pagamento():
 
         tipo = input("Digite o tipo de pagamento (Dinheiro, Cartão, etc.): ")
         valor = float(input("Digite o valor do pagamento: R$ "))
-
         pagamento = Pagamento(tipo=tipo, valor=valor, cliente=cliente)
         session.add(pagamento)
         session.commit()
-
         print("\nPagamento registrado com sucesso!")
-
     except Exception as e:
         print(f"\n Erro ao registrar pagamento: {e}")
         session.rollback()
-
     input("\nPressione Enter para continuar...")
     volta_menu()
+
+# ====== RELATÓRIOS ======
+def menu_relatorios():
+    while True:
+        exibir_titulo("RELATÓRIOS E ESTATÍSTICAS")
+        print("1. Relatório de Clientes")
+        print("2. Relatório de Funcionários")
+        print("3. Relatório de Estoque")
+        print("4. Voltar")
+        
+        opcao = input("Escolha uma opção: ")
+        if opcao == "1":
+            limpar_tela()
+            exibir_titulo("RELATÓRIO DE CLIENTES")
+            total = Cliente.total_clientes_cadastrados()
+            print(f"\nTotal de clientes cadastrados: {total}")
+            print("\nClientes por faixa etária:")
+            idade_min = int(input("Idade mínima: "))
+            idade_max = int(input("Idade máxima: "))
+            clientes = Cliente.clientes_por_faixa_etaria(idade_min, idade_max)
+            if clientes:
+                print(f"\nClientes entre {idade_min} e {idade_max} anos:")
+                for cliente in clientes:
+                    print(f"{cliente.nome} - {cliente.idade} anos")
+            else:
+                print("Nenhum cliente nesta faixa etária.")
+                
+            input("\nPressione Enter para continuar...")
+        elif opcao == "2":
+            limpar_tela()
+            exibir_titulo("RELATÓRIO DE FUNCIONÁRIOS")
+            funcionarios_por_cargo = Funcionario.total_funcionarios_por_cargo()
+            print("\nFuncionários por cargo:")
+            for cargo, total in funcionarios_por_cargo.items():
+                print(f"{cargo}: {total}")
+            media = Funcionario.media_salarial()
+            if media is not None:
+                print(f"\nMédia salarial: R${media:.2f}")
+            else:
+                print("\nMédia salarial: dados insuficientes para o cálculo.")
+            
+            input("\nPressione Enter para continuar...")
+        elif opcao == "3":
+            limpar_tela()
+            exibir_titulo("RELATÓRIO DE ESTOQUE")
+            produtos_baixo_estoque = Produto.produtos_abaixo_estoque()
+            if produtos_baixo_estoque:
+                print("\nProdutos com estoque baixo:")
+                for produto in produtos_baixo_estoque:
+                    print(f"{produto.nome} - {produto.quantidade} unidades")
+            else:
+                print("\nNenhum produto com estoque baixo.")
+            valor_total = Produto.valor_total_estoque()
+            print(f"\nValor total em estoque: R${valor_total:.2f}")
+            
+            input("\nPressione Enter para continuar...")
+        elif opcao == "4":
+            volta_menu()
+        else:
+            print("Opção inválida.")
+            input("\nPressione Enter para continuar...")
 
 # ====== FUNÇÃO DE SAÍDA =====
 def sair():
